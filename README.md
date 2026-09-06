@@ -38,7 +38,6 @@ Conceived as a monolithic, in-memory execution suite, its core purpose is twofol
 [1] Static File Inspection Suite (Metadata, Hashes, YARA, VirusTotal)
 [2] Historical Log Investigation Engine (Blind Scan -> Add Indicator)
 [3] Native Resource Monitor (System Performance & Process Warning Alert)
-[4 / Q] Terminate Session & Self-Clean
 ```
 
 ## 🚀 Quick Execution
