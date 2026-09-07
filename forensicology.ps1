@@ -1,13 +1,11 @@
 # ==============================================================================
-# Program    : Forensicology by glastfin
-# Author     : glastfin
+# Program    : FORENSICOLOGY
+# Author     : GlaStFiN
 # Description: Monolithic In-Memory Windows Incident Response & Remediation Suite
-# Direct Exec: powershell -ExecutionPolicy Bypass -Command "irm <URL> | iex"
+# Mission    : "I endeavor to make this cyber world easier and 'safer' to live in"
+# Execution  : Global IEX / Local PowerShell Compatible
 # ==============================================================================
 
-# ------------------------------------------------------------------------------
-# 1. Process-Scoped Execution Policy Bypass
-# ------------------------------------------------------------------------------
 try {
     Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process -Force -ErrorAction SilentlyContinue
 }
@@ -18,185 +16,443 @@ catch {
     }
 }
 
-# ------------------------------------------------------------------------------
-# 2. State Management & In-Memory Storage
-# ------------------------------------------------------------------------------
 $script:VTKey = ""
 $script:OriginalTitle = $host.UI.RawUI.WindowTitle
 $script:Running = $true
+$script:HostIdentifier = $env:COMPUTERNAME
 
+# Session Memory State
 $script:InvestigationState = [PSCustomObject]@{
     SuspiciousTargets = [System.Collections.Generic.List[string]]::new()
+    IgnoredCategories = [System.Collections.Generic.List[string]]::new()
     TimeframeStart    = (Get-Date).AddDays(-1)
     TimeframeEnd      = Get-Date
     DiscoveredAssets  = [System.Collections.Generic.List[PSObject]]::new()
+    AuditHistory      = [System.Collections.Generic.List[PSObject]]::new()
+    DiscoveredIPs     = [System.Collections.Generic.HashSet[string]]::new()
 }
 
+function Read-CustomInput ($promptText) {
+    Write-Host -NoNewline $promptText
+    $inputStr = ""
+    while ($script:Running) {
+        if ([Console]::KeyAvailable) {
+            $key = [Console]::ReadKey($true)
+            if ([int]$key.KeyChar -eq 3 -or ($key.Key -eq "C" -and $key.Modifiers -match "Control")) {
+                Write-Host "`n [!] ^C Interrupt Captured - Triggering Termination Engine..." -ForegroundColor Magenta
+                $confirm = Show-CenteredExitBox -titleMessage "SESSION TERMINATION AND PURGE ENGINE"
+                if ($confirm) {
+                    $script:Running = $false
+                    return "Q"
+                } else {
+                    Write-Host "`n [*] Resuming session..." -ForegroundColor Green
+                    return ""
+                }
+            }
+            elseif ($key.Key -eq "Enter") {
+                Write-Host ""
+                return $inputStr
+            }
+            elseif ($key.Key -eq "Backspace") {
+                if ($inputStr.Length -gt 0) {
+                    $inputStr = $inputStr.Substring(0, $inputStr.Length - 1)
+                    Write-Host "`b `b" -NoNewline
+                }
+            }
+            else {
+                $inputStr += $key.KeyChar
+                Write-Host -NoNewline $key.KeyChar
+            }
+        }
+        Start-Sleep -Milliseconds 20
+    }
+    return "Q"
+}
+
+[Console]::TreatControlCAsInput = $true
+$cancelHandler = [ConsoleCancelEventHandler]{
+    param($sender, $eventArgs)
+    $eventArgs.Cancel = $true
+    $script:Running = $false
+}
+[Console]::add_CancelKeyPress($cancelHandler)
+
 try {
-    $host.UI.RawUI.WindowTitle = "GLASTFIN :: FORENSICOLOGY | Endpoint Forensics Suite"
+    if ($host.Name -eq "ConsoleHost") {
+        $host.UI.RawUI.WindowTitle = "GLASTFIN :: FORENSICOLOGY | Endpoint Forensics Suite"
+    }
 
     Clear-Host
-    Write-Host "$([char]27)[3mBonsoir.$([char]27)[0m`n" -ForegroundColor DarkCyan
+    Write-Host "`n  $([char]27)[3mBonsoir, GlaStFiN~$([char]27)[0m`n" -ForegroundColor DarkMagenta
     Start-Sleep -Seconds 1
 
-    function Show-Header {
+    function Show-Header ($catMood = "home") {
         Clear-Host
         $currentDateTime = Get-Date -Format "yyyy-MM-dd HH:mm:ss K"
-        Write-Host "====================================================================================================" -ForegroundColor Cyan
-        Write-Host "  ______ ____   _____  ______ _   _  _____ _____ _____ ____  _      ____   _______     __" -ForegroundColor Green
-        Write-Host " |  ____/ __ \ |  __ \|  ____| \ | |/ ____|_   _/ ____/ __ \| |    / __ \ / ____\ \   / /" -ForegroundColor Green
-        Write-Host " | |__ | |  | || |__) | |__  |  \| | (___   | || |   | |  | | |   | |  | | |  __ \ \_/ / " -ForegroundColor DarkGreen
-        Write-Host " |  __|| |  | ||  _  /|  __| | . ` |\___ \  | || |   | |  | | |   | |  | | | |_ | \   /  " -ForegroundColor Green
-        Write-Host " | |   | |__| || | \ \| |____| |\  |____) |_| || |___| |__| | |___| |__| | |__| |  | |   " -ForegroundColor Green
-        Write-Host " |_|    \____/ |_|  \_\______|_| \_|_____/|_____\_____\____/|______\____/ \_____|  |_|   " -ForegroundColor DarkCyan
-        Write-Host "                                                                                          " -ForegroundColor Cyan
-        Write-Host "                  --->   B Y   G L A S T F I N   <---                                    " -ForegroundColor Yellow
-        Write-Host "====================================================================================================" -ForegroundColor Cyan
-        Write-Host "   Automated TUI Windows Forensics, Threat Purge & Pivot Engine                           " -ForegroundColor DarkCyan
-        Write-Host "   AUTHOR       : GLASTFIN" -ForegroundColor Green
-        Write-Host "   SYSTEM CLOCK : $currentDateTime" -ForegroundColor Gray
-        Write-Host "====================================================================================================" -ForegroundColor Cyan
+
+        Write-Host " +-------------------------------------------------------------------------------------------------+" -ForegroundColor Magenta
+        Write-Host " |  ___ ___  ___ ___ _  _ ___ ___ ___  ___  _    ___   ___  __   __   |    .-'''-.                     |" -ForegroundColor DarkMagenta
+        Write-Host " | | __/ _ \| _ \ __| \| / __|_ _| __/ _ \| |  / _ \ / \ \ \ / /   |   /   _   \  Glory to         |" -ForegroundColor DarkMagenta
+        Write-Host " | | _| (_) |   / _|| .` \__ \| || _| (_) | |_| (_) | () \ V /    |  | =|=====|= | Mankind.         |" -ForegroundColor Magenta
+        Write-Host " | |_| \___/|_|_\___|_|\_|___/___|___\___/|____\___/ \__/ |_|     |   \  \___/  /                  |" -ForegroundColor Magenta
+        Write-Host " +-------------------------------------------------------------------------------------------------+" -ForegroundColor Magenta
+        Write-Host " |  FSOCIETY :: CONTROL IS AN ILLUSION. LEAVE NO TRACE IN MEMORY.                                  |" -ForegroundColor Red
+        Write-Host " +-------------------------------------------------------------------------------------------------+" -ForegroundColor Magenta
+        Write-Host ("|		LEAD : {0,-35} | TIME : {1,-28} |" -f $script:HostIdentifier, $currentDateTime) -ForegroundColor Cyan
+        Write-Host " +-------------------------------------------------------------------------------------------------+" -ForegroundColor Magenta
         Write-Host ""
+    }
+
+    function Show-CenteredExitBox ($titleMessage = "SESSION TERMINATION AND PURGE ENGINE") {
+        Clear-Host
+        $rawUI = $host.UI.RawUI
+        $width = 80
+        if ($rawUI -and $rawUI.WindowSize.Width -gt 60) { $width = $rawUI.WindowSize.Width }
+
+        $boxWidth = 58
+        $padLeft = [math]::Max(0, [math]::Floor(($width - $boxWidth) / 2))
+        $indent = " " * $padLeft
+
+        $formattedTitle = $titleMessage.PadRight(52).Substring(0, 52)
+
+        Write-Host "`n`n"
+        Write-Host ("{0}+----------------------------------------------------------+" -f $indent) -ForegroundColor Magenta
+        Write-Host ("{0}| {1} |" -f $indent, $formattedTitle) -ForegroundColor Red
+        Write-Host ("{0}+----------------------------------------------------------+" -f $indent) -ForegroundColor Magenta
+        Write-Host ("{0}|    /\_/\                                                 |" -f $indent) -ForegroundColor DarkMagenta
+        Write-Host ("{0}|  ( u.u )  [ENTER] Confirm Termination & Purge Memory     |" -f $indent) -ForegroundColor Yellow
+        Write-Host ("{0}|    > ^ <  [ B ]   Cancel & Stay in Forensics Suite       |" -f $indent) -ForegroundColor Cyan
+        Write-Host ("{0}+----------------------------------------------------------+" -f $indent) -ForegroundColor Magenta
+        
+        $choice = Read-CustomInput ("`n{0} Select Choice [ENTER/B]: " -f $indent)
+        if ($choice.Trim().ToUpper() -eq 'B') {
+            $script:Running = $true
+            return $false
+        }
+        $script:Running = $false
+        return $true
     }
 
     function Exit-ForensicsEngine {
         Clear-Host
-        Write-Host "====================================================================================================" -ForegroundColor Cyan
-        Write-Host "  ______ ____   _____  ______ _   _  _____ _____ _____ ____  _      ____   _______     __" -ForegroundColor Green
-        Write-Host " |  ____/ __ \ |  __ \|  ____| \ | |/ ____|_   _/ ____/ __ \| |    / __ \ / ____\ \   / /" -ForegroundColor Green
-        Write-Host " | |__ | |  | || |__) | |__  |  \| | (___   | || |   | |  | | |   | |  | | |  __ \ \_/ / " -ForegroundColor DarkGreen
-        Write-Host " |  __|| |  | ||  _  /|  __| | . ` |\___ \  | || |   | |  | | |   | |  | | | |_ | \   /  " -ForegroundColor Green
-        Write-Host " | |   | |__| || | \ \| |____| |\  |____) |_| || |___| |__| | |___| |__| | |__| |  | |   " -ForegroundColor Green
-        Write-Host " |_|    \____/ |_|  \_\______|_| \_|_____/|_____\_____\____/|______\____/ \_____|  |_|   " -ForegroundColor DarkCyan
-        Write-Host "                                                                                          " -ForegroundColor Cyan
-        Write-Host "                  --->   B Y   G L A S T F I N   <---                                    " -ForegroundColor Yellow
-        Write-Host "====================================================================================================" -ForegroundColor Cyan
-        Write-Host "  [+] In-Memory Session Destroyed" -ForegroundColor Gray
-        Write-Host "  [+] API Tokens & State Vector Purged" -ForegroundColor Gray
-        Write-Host "  [+] FORENSICOLOGY BY GLASTFIN session cleanly terminated." -ForegroundColor Green
-        Write-Host "====================================================================================================" -ForegroundColor Cyan
+        Write-Host "+--------------------------------------------------------------------------------------------------+" -ForegroundColor Magenta
+        Write-Host "|    /\_/\                                                                                         |" -ForegroundColor DarkMagenta
+        Write-Host "|   ( u.u )  [*] In-Memory Session Destroyed Safely                                               |" -ForegroundColor Gray
+        Write-Host "|    > ^ <   [*] API Tokens & State Vector Purged                                                 |" -ForegroundColor Gray
+        Write-Host "|            [*] FORENSICOLOGY by GlaStFiN session cleanly terminated.                            |" -ForegroundColor Green
+        Write-Host "+--------------------------------------------------------------------------------------------------+" -ForegroundColor Magenta
         
-        Write-Host "`n$([char]27)[3mAu revoir.$([char]27)[0m`n" -ForegroundColor DarkYellow
+        Write-Host "`n  $([char]27)[3mGlory to Mankind, GlaStFiN~$([char]27)[0m`n" -ForegroundColor DarkYellow
         Start-Sleep -Seconds 1
     }
 
-    function Show-Menu {
-        Show-Header
-        Write-Host "  [1] Static File Inspection Suite (Metadata, Hashes, YARA, VirusTotal)" -ForegroundColor Yellow
-        Write-Host "  [2] Historical Log Investigation Engine (Blind Scan -> Add Indicator)" -ForegroundColor Yellow
-        Write-Host "  [3] Native Resource Monitor (System Performance & Process Warning Alert)" -ForegroundColor Yellow
-        Write-Host "  [4 / Q] Terminate Session & Self-Clean" -ForegroundColor Red
-        Write-Host ""
-        
-        if ($script:InvestigationState.DiscoveredAssets.Count -gt 0 -or $script:InvestigationState.SuspiciousTargets.Count -gt 0) {
-            Write-Host "----------------------------------------------------------------------------------------------------" -ForegroundColor DarkGray
-            Write-Host " ACTIVE INVESTIGATION STATE (GLASTFIN ENGINE):" -ForegroundColor Green
-            Write-Host "  > Tracked Indicators : $(if ($script:InvestigationState.SuspiciousTargets.Count -gt 0) { $script:InvestigationState.SuspiciousTargets -join ', ' } else { 'None (Blind Scan Mode)' })" -ForegroundColor Yellow
-            Write-Host "  > Active Time Window : $($script:InvestigationState.TimeframeStart) to $($script:InvestigationState.TimeframeEnd)" -ForegroundColor White
-            Write-Host "  > Identified Events  : $($script:InvestigationState.DiscoveredAssets.Count)" -ForegroundColor White
-            Write-Host "----------------------------------------------------------------------------------------------------`n" -ForegroundColor DarkGray
-        }
+    function Get-FastReverseDNS ($ipAddress) {
+        try {
+            $task = [System.Net.Dns]::GetHostEntryAsync($ipAddress)
+            if ($task.Wait(200)) { return $task.Result.HostName }
+        } catch {}
+        return "Unresolved"
     }
 
-    function Parse-FuzzyTime ($inputStr, $isEndDate = $false) {
-        if ([string]::IsNullOrWhiteSpace($inputStr)) { 
-            if ($isEndDate) { return Get-Date }
-            else { return $null }
-        }
+    function Clear-SessionMemoryState {
+        $script:InvestigationState.SuspiciousTargets.Clear()
+        $script:InvestigationState.IgnoredCategories.Clear()
+        $script:InvestigationState.DiscoveredAssets.Clear()
+        $script:InvestigationState.AuditHistory.Clear()
+        $script:InvestigationState.DiscoveredIPs.Clear()
+        [System.GC]::Collect()
+        Write-Host "`n  [+] In-Memory investigation state successfully flushed." -ForegroundColor Green
+        Start-Sleep -Seconds 1
+    }
 
-        $cleanStr = $inputStr.Trim().ToLower()
-        $now = Get-Date
-        $dayOfWeekOffset = ([int]$now.DayOfWeek + 6) % 7
-        $startOfThisWeek = $now.Date.AddDays(-$dayOfWeekOffset)
+    function Set-InvestigationTimeframe {
+        Write-Host "`n  +--- ADJUST INVESTIGATION TIMEFRAME (FUZZY & RELATIVE) -----------------------------------------+" -ForegroundColor Cyan
+        Write-Host "  | Current Window: " -NoNewline
+        Write-Host ("{0} TO {1}" -f $script:InvestigationState.TimeframeStart, $script:InvestigationState.TimeframeEnd) -ForegroundColor Yellow
+        Write-Host "  +-----------------------------------------------------------------------------------------------+" -ForegroundColor Cyan
+        Write-Host "  [1] Last 1 Hour" -ForegroundColor Yellow
+        Write-Host "  [2] Last 24 Hours (Default)" -ForegroundColor Yellow
+        Write-Host "  [3] Last 7 Days" -ForegroundColor Yellow
+        Write-Host "  [4] Custom Range (Specify Days)" -ForegroundColor Yellow
+        Write-Host "  [5] Last Month (~30 Days / Fuzzy)" -ForegroundColor Yellow
+        Write-Host "  [6] Last Year (~365 Days / Fuzzy)" -ForegroundColor Yellow
+        Write-Host "  [B] Keep Current Timeframe" -ForegroundColor Gray
 
-        switch -Regex ($cleanStr) {
-            "^now$" { return $now }
-            "^today$" {
-                if ($isEndDate) { return $now.Date.AddDays(1).AddSeconds(-1) }
-                else { return $now.Date }
+        $tChoice = Read-CustomInput "`n  Select Timeframe Option [1-6 / B]: "
+        $cleanChoice = $tChoice.Trim().ToLower()
+
+        switch -Wildcard ($cleanChoice) {
+            { $_ -eq "1" -or $_ -like "*hour*" } {
+                $script:InvestigationState.TimeframeStart = (Get-Date).AddHours(-1)
+                $script:InvestigationState.TimeframeEnd   = Get-Date
+                $script:InvestigationState.DiscoveredAssets.Clear()
+                Write-Host "  [+] Timeframe set to Last 1 Hour." -ForegroundColor Green
             }
-            "^yesterday$" {
-                if ($isEndDate) { return $now.Date.AddSeconds(-1) }
-                else { return $now.Date.AddDays(-1) }
+            { $_ -eq "2" -or $_ -like "*24*" -or $_ -like "*day*" } {
+                $script:InvestigationState.TimeframeStart = (Get-Date).AddDays(-1)
+                $script:InvestigationState.TimeframeEnd   = Get-Date
+                $script:InvestigationState.DiscoveredAssets.Clear()
+                Write-Host "  [+] Timeframe set to Last 24 Hours." -ForegroundColor Green
             }
-            "^this week$" {
-                if ($isEndDate) { return $now }
-                else { return $startOfThisWeek }
+            { $_ -eq "3" -or $_ -like "*7*" } {
+                $script:InvestigationState.TimeframeStart = (Get-Date).AddDays(-7)
+                $script:InvestigationState.TimeframeEnd   = Get-Date
+                $script:InvestigationState.DiscoveredAssets.Clear()
+                Write-Host "  [+] Timeframe set to Last 7 Days." -ForegroundColor Green
             }
-            "^last week$" {
-                $startOfLastWeek = $startOfThisWeek.AddDays(-7)
-                if ($isEndDate) { return $startOfThisWeek.AddSeconds(-1) }
-                else { return $startOfLastWeek }
+            { $_ -eq "4" -or $_ -like "*custom*" } {
+                $daysInput = Read-CustomInput "  Enter number of past days to query (e.g. 3, 14, 30): "
+                $parsedDays = 0
+                if ([int]::TryParse($daysInput, [ref]$parsedDays) -and $parsedDays -gt 0) {
+                    $script:InvestigationState.TimeframeStart = (Get-Date).AddDays(-$parsedDays)
+                    $script:InvestigationState.TimeframeEnd   = Get-Date
+                    $script:InvestigationState.DiscoveredAssets.Clear()
+                    Write-Host ("  [+] Timeframe set to Last {0} Days." -f $parsedDays) -ForegroundColor Green
+                } else {
+                    Write-Host "  [!] Invalid number entered. Timeframe unmodified." -ForegroundColor Red
+                }
             }
-            "^this month$" {
-                $startOfThisMonth = Get-Date -Year $now.Year -Month $now.Month -Day 1 -Hour 0 -Minute 0 -Second 0
-                if ($isEndDate) { return $now }
-                else { return $startOfThisMonth }
+            { $_ -eq "5" -or $_ -like "*month*" } {
+                $script:InvestigationState.TimeframeStart = (Get-Date).AddDays(-30)
+                $script:InvestigationState.TimeframeEnd   = Get-Date
+                $script:InvestigationState.DiscoveredAssets.Clear()
+                Write-Host "  [+] Timeframe set to Last Month (~30 Days Fuzzy Range)." -ForegroundColor Green
             }
-            "^last month$" {
-                $firstOfThisMonth = Get-Date -Year $now.Year -Month $now.Month -Day 1 -Hour 0 -Minute 0 -Second 0
-                $startOfLastMonth = $firstOfThisMonth.AddMonths(-1)
-                if ($isEndDate) { return $firstOfThisMonth.AddSeconds(-1) }
-                else { return $startOfLastMonth }
+            { $_ -eq "6" -or $_ -like "*year*" } {
+                $script:InvestigationState.TimeframeStart = (Get-Date).AddDays(-365)
+                $script:InvestigationState.TimeframeEnd   = Get-Date
+                $script:InvestigationState.DiscoveredAssets.Clear()
+                Write-Host "  [+] Timeframe set to Last Year (~365 Days Fuzzy Range)." -ForegroundColor Green
             }
-            "^(\d+)\s*(h|hour|hours)\s*ago$" { return $now.AddHours(-[int]$Matches[1]) }
-            "^(\d+)\s*(d|day|days)\s*ago$" { return $now.AddDays(-[int]$Matches[1]) }
             default {
-                $parsedDate = Get-Date
-                if ([datetime]::TryParse($inputStr, [ref]$parsedDate)) { return $parsedDate }
-                return $null
+                Write-Host "  [!] Selection not recognized. Timeframe unmodified." -ForegroundColor Yellow
+            }
+        }
+        Start-Sleep -Seconds 1
+    }
+
+    # ==============================================================================
+    # CONSCOPE: Live Endpoint Connections, Sockets, Ports & Routing Suite
+    # ==============================================================================
+    function Show-ConScopeMenu {
+        $inConScope = $true
+        while ($inConScope -and $script:Running) {
+            Show-Header -catMood "conscope"
+            Write-Host "  +--- CONSCOPE: LIVE ENDPOINT CONNECTIONS, PORTS & ROUTING SUITE -----------------------------+" -ForegroundColor Cyan
+            Write-Host "  |" -ForegroundColor Cyan
+            Write-Host "  +---> [1] Active Socket Correlation Scan" -ForegroundColor Yellow
+            Write-Host "  +---> [2] Active Listening Ports & Owning Process Map" -ForegroundColor Yellow
+            Write-Host "  +---> [3] ARP Cache & Gateway Integrity Check" -ForegroundColor Yellow
+            Write-Host "  +---> [4] Active IPv4 Routing Table Inspection" -ForegroundColor Yellow
+            Write-Host "  +---> [5] Socket Traffic Filter" -ForegroundColor Yellow
+            Write-Host "  |" -ForegroundColor Cyan
+            Write-Host "  +---> [B] Return to Main Menu" -ForegroundColor Gray
+            Write-Host "  +---> [Q] Exit Application" -ForegroundColor Red
+            Write-Host ""
+
+            $opt = Read-CustomInput "  Select ConScope Option [1-5 / B / Q]: "
+            switch ($opt.ToUpper()) {
+                "1" { Invoke-ConScopeScan }
+                "2" {
+                    Write-Host "`n  [*] ConScope Active Listener Matrix:`n" -ForegroundColor Cyan
+                    $procMap = @{}
+                    Get-Process -ErrorAction SilentlyContinue | ForEach-Object { $procMap[$_.Id] = $_.ProcessName }
+                    
+                    Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | ForEach-Object {
+                        $pName = if ($procMap.ContainsKey($_.OwningProcess)) { $procMap[$_.OwningProcess] } else { "Unknown" }
+                        [PSCustomObject]@{
+                            LocalAddress = $_.LocalAddress
+                            LocalPort    = $_.LocalPort
+                            PID          = $_.OwningProcess
+                            Process      = $pName
+                        }
+                    } | Format-Table -AutoSize
+                    Read-CustomInput "`n  Press Enter to continue..." | Out-Null
+                }
+                "3" {
+                    Write-Host "`n  [*] ConScope ARP Neighbor Cache:`n" -ForegroundColor Cyan
+                    Get-NetNeighbor -AddressFamily IPv4 -ErrorAction SilentlyContinue | 
+                        Select-Object IPAddress, LinkLayerAddress, State, InterfaceAlias | 
+                        Format-Table -AutoSize
+                    Read-CustomInput "`n  Press Enter to continue..." | Out-Null
+                }
+                "4" {
+                    Write-Host "`n  [*] ConScope IPv4 Routing Table:`n" -ForegroundColor Cyan
+                    Get-NetRoute -AddressFamily IPv4 -ErrorAction SilentlyContinue | 
+                        Select-Object DestinationPrefix, NextHop, RouteMetric, InterfaceAlias | 
+                        Format-Table -AutoSize
+                    Read-CustomInput "`n  Press Enter to continue..." | Out-Null
+                }
+                "5" {
+                    $filterVal = Read-CustomInput "  Enter Port Number or PID to filter sockets: "
+                    if (-not [string]::IsNullOrWhiteSpace($filterVal)) {
+                        Write-Host ("`n  [*] Filtering Sockets for Term '{0}':`n" -f $filterVal) -ForegroundColor Cyan
+                        Get-NetTCPConnection -ErrorAction SilentlyContinue | 
+                            Where-Object { $_.LocalPort -eq $filterVal -or $_.RemotePort -eq $filterVal -or $_.OwningProcess -eq $filterVal } |
+                            Select-Object LocalAddress, LocalPort, RemoteAddress, RemotePort, State, OwningProcess |
+                            Format-Table -AutoSize
+                    }
+                    Read-CustomInput "`n  Press Enter to continue..." | Out-Null
+                }
+                "B" { $inConScope = $false }
+                "Q" { $script:Running = $false; $inConScope = $false }
+                default { Write-Host "  [!] Invalid choice. Please select [1-5 / B / Q]." -ForegroundColor Red; Start-Sleep -Seconds 1 }
             }
         }
     }
 
-    function Set-TimeslotWindow {
-        Write-Host "`n[*] Configure Historical Investigation Window" -ForegroundColor Cyan
-        Write-Host "    Fuzzy options: 'now', 'today', 'yesterday', 'this week', 'last week', 'this month', 'last month', '3 hours ago', '2 days ago'" -ForegroundColor DarkGray
-        Write-Host "    Current Date/Time Baseline: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')" -ForegroundColor Yellow
-        
-        $startInput = Read-Host "`nEnter Start Date/Time or Keyword"
-        $endInput   = Read-Host "Enter End Date/Time or Keyword (Press Enter for 'NOW')"
+    function Invoke-ConScopeScan {
+        Show-Header -catMood "conscope"
+        Write-Host "  [*] Executing ConScope Pipeline (Netstat -> PID -> Reverse DNS)..." -ForegroundColor Cyan
+        Write-Host "  -------------------------------------------------------------------------------------------------" -ForegroundColor DarkGray
 
-        $parsedStart = Parse-FuzzyTime $startInput -isEndDate $false
-        $parsedEnd   = Parse-FuzzyTime $endInput -isEndDate $true
-
-        if ($parsedStart) {
-            $script:InvestigationState.TimeframeStart = $parsedStart
-            $script:InvestigationState.TimeframeEnd   = $parsedEnd
-            Write-Host "[+] Investigation timeframe updated: $($script:InvestigationState.TimeframeStart) to $($script:InvestigationState.TimeframeEnd)" -ForegroundColor Green
-        } else {
-            Write-Host "[!] Unable to parse start timestamp. Retaining active timeframe window." -ForegroundColor Red
+        $conns = Get-NetTCPConnection -State Established -ErrorAction SilentlyContinue
+        if (-not $conns) {
+            Write-Host "  [-] No active ESTABLISHED connections found on host." -ForegroundColor Yellow
+            Start-Sleep -Seconds 1.5
+            return
         }
-        Start-Sleep -Seconds 1
+
+        $procMap = @{}
+        Get-Process -ErrorAction SilentlyContinue | ForEach-Object { $procMap[$_.Id] = $_.ProcessName }
+
+        $results = [System.Collections.Generic.List[PSObject]]::new()
+        foreach ($c in $conns) {
+            $rIP   = $c.RemoteAddress
+            $pidN  = $c.OwningProcess
+            $pName = if ($procMap.ContainsKey($pidN)) { $procMap[$pidN] } else { "Unknown" }
+
+            if ($rIP -notmatch "^(127\.|169\.254\.|10\.|172\.(1[6-9]|2[0-9]|3[0-1])\.|192\.168\.|::1|fe80:)") {
+                [void]$script:InvestigationState.DiscoveredIPs.Add($rIP)
+            }
+
+            $hostName = Get-FastReverseDNS $rIP
+
+            $results.Add([PSCustomObject]@{
+                Process      = $pName
+                PID          = $pidN
+                LocalPort    = $c.LocalPort
+                RemoteIP     = $rIP
+                RemotePort   = $c.RemotePort
+                ResolvedHost = $hostName
+            })
+        }
+
+        Write-Host "`n  [+] Active Socket Correlation Matrix:`n" -ForegroundColor Green
+        $results | Format-Table Process, PID, LocalPort, RemoteIP, RemotePort, ResolvedHost -AutoSize
+
+        Write-Host ("  [+] Unique External Public IPs Saved in Memory ({0} found):" -f $script:InvestigationState.DiscoveredIPs.Count) -ForegroundColor Green
+        foreach ($ip in $script:InvestigationState.DiscoveredIPs) {
+            Write-Host ("      - IP: {0}" -f $ip) -ForegroundColor White
+        }
+
+        $inConScopePivot = $true
+        while ($inConScopePivot -and $script:Running) {
+            Write-Host "`n  -------------------------------------------------------------------------------------------------" -ForegroundColor DarkMagenta
+            Write-Host "  [1] Generate VirusTotal Lookup Links for Saved Public IPs" -ForegroundColor Yellow
+            Write-Host "  [2] Pivot Process / Application Name directly to Historical Log Engine" -ForegroundColor Yellow
+            Write-Host "  [3] Pivot Process / Executable Path to Static File Inspection Engine" -ForegroundColor Yellow
+            Write-Host "  [B] Return to ConScope Menu" -ForegroundColor Gray
+
+            $opt = Read-CustomInput "`n  Select ConScope Action [1-3 / B]: "
+            switch ($opt.Trim().ToUpper()) {
+                '1' { Invoke-VirusTotalIPLookup }
+                '2' {
+                    $targetProc = Read-CustomInput "  Enter Application/Process Name to pivot into logs: "
+                    if (-not [string]::IsNullOrWhiteSpace($targetProc)) {
+                        $cleanProc = $targetProc.Trim()
+                        if (-not $script:InvestigationState.SuspiciousTargets.Contains($cleanProc)) {
+                            $script:InvestigationState.SuspiciousTargets.Add($cleanProc)
+                        }
+                        Explorative-Forensics
+                    }
+                }
+                '3' {
+                    $targetPath = Read-CustomInput "  Enter Process Path or Executable Name to analyze statically: "
+                    if (-not [string]::IsNullOrWhiteSpace($targetPath)) {
+                        Analyze-FileCustomPath $targetPath.Trim("'", '"')
+                    }
+                }
+                'B' { $inConScopePivot = $false }
+                default { Write-Host "  [!] Option unrecognized. Returning to ConScope scope." -ForegroundColor Yellow }
+            }
+        }
+    }
+
+    # ==============================================================================
+    # NETSCOPE: Deep Forensics, Timeframe & Artifact Engine
+    # ==============================================================================
+    function Show-NetScopeMenu {
+        $inNetScope = $true
+        while ($inNetScope -and $script:Running) {
+            Show-Header -catMood "netscope"
+            Write-Host "  +--- NETSCOPE: DEEP FORENSICS & HISTORICAL LOG ENGINE -------------------------------------------+" -ForegroundColor Cyan
+            Write-Host "  |" -ForegroundColor Cyan
+            Write-Host ("  |   Active Timeframe: {0} TO {1}" -f $script:InvestigationState.TimeframeStart.ToString("MM/dd HH:mm"), $script:InvestigationState.TimeframeEnd.ToString("MM/dd HH:mm")) -ForegroundColor DarkGray
+            Write-Host "  |" -ForegroundColor Cyan
+            Write-Host "  +---> [1] Static File Inspection Suite" -ForegroundColor Yellow
+            Write-Host "  +---> [2] Historical Log Investigation Engine" -ForegroundColor Yellow
+            Write-Host "  +---> [3] Audit Downloads & Artifact Metadata" -ForegroundColor Yellow
+            Write-Host "  +---> [T] Configure Investigation Timeframe Window" -ForegroundColor Cyan
+            Write-Host "  |" -ForegroundColor Cyan
+            Write-Host "  +---> [B] Return to Main Menu" -ForegroundColor Gray
+            Write-Host "  +---> [Q] Exit Application" -ForegroundColor Red
+            Write-Host ""
+
+            $opt = Read-CustomInput "  Select NetScope Option [1-3 / T / B / Q]: "
+            switch ($opt.ToUpper()) {
+                "1" { Analyze-File }
+                "2" { Explorative-Forensics }
+                "3" { Audit-ApplicationMetadata }
+                "T" { Set-InvestigationTimeframe }
+                "B" { $inNetScope = $false }
+                "Q" { $script:Running = $false; $inNetScope = $false }
+                default { Write-Host "  [!] Invalid choice. Please select [1-3 / T / B / Q]." -ForegroundColor Red; Start-Sleep -Seconds 1 }
+            }
+        }
+    }
+
+    # ==============================================================================
+    # THREAT INTEL & SUPPORT FUNCTIONS
+    # ==============================================================================
+    function Invoke-VirusTotalIPLookup {
+        if ($script:InvestigationState.DiscoveredIPs.Count -eq 0) {
+            Write-Host "`n  [-] No external public IPs currently stored in memory." -ForegroundColor Yellow
+            Start-Sleep -Seconds 1.5
+            return
+        }
+
+        Write-Host "`n  [*] Generated VirusTotal GUI Links for Saved Public IPs (Ctrl + Click to Open):`n" -ForegroundColor Cyan
+        foreach ($ip in $script:InvestigationState.DiscoveredIPs) {
+            $vtUrl = "https://www.virustotal.com/gui/ip-address/{0}" -f $ip
+            Write-Host ("      • IP: {0,-16} -> " -f $ip) -NoNewline -ForegroundColor White
+            Write-Host $vtUrl -ForegroundColor Yellow
+        }
     }
 
     function Purge-MalwareThreat ($targetInput) {
         if ([string]::IsNullOrWhiteSpace($targetInput)) { return }
         $targetInput = $targetInput.Trim("'", '"')
 
-        Write-Host "`n====================================================================================================" -ForegroundColor Red
-        Write-Host "   CONFIRM THREAT REMEDIATION & PURGE [GLASTFIN ENGINE]                                            " -ForegroundColor Yellow
-        Write-Host "====================================================================================================" -ForegroundColor Red
-        Write-Host "  TARGET FILE / PROCESS : $targetInput" -ForegroundColor White
+        Write-Host "`n  +--- CONFIRM THREAT REMEDIATION OPTIONS [GLASTFIN ENGINE] ---------------------------------------+" -ForegroundColor Red
+        Write-Host ("  | TARGET FILE / PROCESS : {0}" -f $targetInput) -ForegroundColor White
 
-        $confirm = Read-Host "`nAre you sure you want to KILL active processes, DELETE this file, and CLEAN Registry keys? [y/N]"
-        if ($confirm -ne 'y' -and $confirm -ne 'Y') {
-            Write-Host "[-] Threat purge operation canceled." -ForegroundColor Gray
+        Write-Host "`n  | Select Remediation Mode:" -ForegroundColor Cyan
+        Write-Host "  +---> [1] Send File to RECYCLE BIN (Soft Delete)" -ForegroundColor Yellow
+        Write-Host "  +---> [2] Permanent Delete ONLY (Bypass Recycle Bin)" -ForegroundColor Yellow
+        Write-Host "  +---> [3] FULL PURGE (Kill Process, Permanent Delete & Wipe Persistence RegKeys)" -ForegroundColor Red
+        Write-Host "  +---> [C] Cancel Operation" -ForegroundColor Gray
+
+        $mode = Read-CustomInput "`n Select option [1 / 2 / 3 / C]: "
+        if ($mode.ToUpper() -eq 'C' -or ($mode -ne '1' -and $mode -ne '2' -and $mode -ne '3')) {
+            Write-Host "  [-] Threat remediation canceled." -ForegroundColor Gray
             return
         }
 
         $fileName = [System.IO.Path]::GetFileName($targetInput)
         $fileNameNoExt = [System.IO.Path]::GetFileNameWithoutExtension($targetInput)
 
-        Write-Host "`n[*] Initializing Threat Removal Sequence..." -ForegroundColor Cyan
-
-        function Show-PurgeProgress ($percent, $statusText) {
-            $barWidth = 30
-            $completed = [math]::Round(($percent / 100) * $barWidth)
-            $remaining = $barWidth - $completed
-            $bar = ("#" * $completed) + ("-" * $remaining)
-            Write-Host -NoNewline "`r  [$bar] $percent% | $statusText" -ForegroundColor Yellow
-        }
+        Write-Host "`n  [*] Initializing Threat Removal Sequence..." -ForegroundColor Cyan
 
         $runningProcs = Get-Process -ErrorAction SilentlyContinue | Where-Object { 
             $_.Path -eq $targetInput -or $_.ProcessName -eq $fileNameNoExt -or $_.ProcessName -eq $targetInput
@@ -204,233 +460,247 @@ try {
         if ($runningProcs) {
             foreach ($proc in $runningProcs) {
                 try {
-                    $pPath = $proc.Path
                     Stop-Process -Id $proc.Id -Force -ErrorAction Stop
-                    if ($pPath -and -not (Test-Path $targetInput)) { $targetInput = $pPath }
+                    Write-Host ("      [+] Process Terminated: PID {0}" -f $proc.Id) -ForegroundColor Green
                 } catch {}
             }
         }
-        Show-PurgeProgress 25 "Active process terminated"
-        Start-Sleep -Milliseconds 600
 
         if (Test-Path $targetInput) {
-            try { Remove-Item -Path $targetInput -Force -ErrorAction Stop } catch {}
-        }
-        Show-PurgeProgress 50 "Target file path remediated"
-        Start-Sleep -Milliseconds 600
-
-        $downloadsFolder = "$env:USERPROFILE\Downloads"
-        if (Test-Path $downloadsFolder) {
-            Get-ChildItem $downloadsFolder -File -ErrorAction SilentlyContinue | Where-Object {
-                $_.Name -like "*$fileNameNoExt*" -or $_.Name -like "*$fileName*"
-            } | ForEach-Object {
-                try { Remove-Item -Path $_.FullName -Force -ErrorAction Stop } catch {}
+            if ($mode -eq '1') {
+                try {
+                    Add-Type -AssemblyName Microsoft.VisualBasic
+                    [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile(
+                        $targetInput, 
+                        'OnlyErrorDialogs', 
+                        'SendToRecycleBin'
+                    )
+                    Write-Host ("      [+] File successfully sent to RECYCLE BIN: {0}" -f $targetInput) -ForegroundColor Green
+                } catch {
+                    Write-Host ("      [!] Error moving file to Recycle Bin: {0}" -f $_) -ForegroundColor Red
+                }
+            } else {
+                try { 
+                    Remove-Item -Path $targetInput -Force -ErrorAction Stop 
+                    Write-Host ("      [+] File Permanently Deleted: {0}" -f $targetInput) -ForegroundColor Green
+                } catch {
+                    Write-Host ("      [!] Error deleting file: {0}" -f $_) -ForegroundColor Red
+                }
             }
+        } else {
+            Write-Host ("      [-] File path does not exist on disk: {0}" -f $targetInput) -ForegroundColor Gray
         }
-        Show-PurgeProgress 75 "Correlated downloaded payloads purged"
-        Start-Sleep -Milliseconds 600
 
-        $regLocations = @(
-            "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run",
-            "HKCU:\Software\Microsoft\Windows\CurrentVersion\RunOnce",
-            "HKLM:\Software\Microsoft\Windows\CurrentVersion\Run",
-            "HKLM:\Software\Microsoft\Windows\CurrentVersion\RunOnce"
-        )
-        foreach ($regPath in $regLocations) {
-            if (Test-Path $regPath) {
-                $props = Get-ItemProperty -Path $regPath -ErrorAction SilentlyContinue
-                if ($props) {
-                    foreach ($prop in $props.psobject.Properties) {
-                        if ($prop.Value -like "*$fileName*" -or $prop.Value -like "*$targetInput*") {
-                            try { Remove-ItemProperty -Path $regPath -Name $prop.Name -Force -ErrorAction Stop } catch {}
+        if ($mode -eq '3') {
+            Write-Host "`n  [*] Cleaning Persistence Registry Keys..." -ForegroundColor Cyan
+            $regLocations = @(
+                "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run",
+                "HKCU:\Software\Microsoft\Windows\CurrentVersion\RunOnce",
+                "HKLM:\Software\Microsoft\Windows\CurrentVersion\Run",
+                "HKLM:\Software\Microsoft\Windows\CurrentVersion\RunOnce"
+            )
+            foreach ($regPath in $regLocations) {
+                if (Test-Path $regPath) {
+                    $props = Get-ItemProperty -Path $regPath -ErrorAction SilentlyContinue
+                    if ($props) {
+                        foreach ($prop in $props.psobject.Properties) {
+                            if ($prop.Value -like "*$fileName*" -or $prop.Value -like "*$targetInput*") {
+                                try { 
+                                    Remove-ItemProperty -Path $regPath -Name $prop.Name -Force -ErrorAction Stop 
+                                    Write-Host ("      [+] Persistence Registry Key Cleared: {0}" -f $prop.Name) -ForegroundColor Green
+                                } catch {}
+                            }
                         }
                     }
                 }
             }
+        } else {
+            Write-Host "      [*] Registry cleanup skipped by user selection." -ForegroundColor Yellow
         }
-        Show-PurgeProgress 100 "All persistent entries & artifacts cleared"
-        Write-Host "`n`n[+] Threat remediation successfully executed by glastfin engine." -ForegroundColor Green
+
+        Write-Host "`n  [+] Targeted threat remediation sequence completed~" -ForegroundColor Green
+        Start-Sleep -Seconds 1
+
+        [void](Show-CenteredExitBox -titleMessage "REMEDIATION COMPLETE - THREAT PURGED")
+    }
+
+    function Invoke-YaraScan ($filePath) {
+        Write-Host "`n  [*] Executing Inline YARA Signature Inspection..." -ForegroundColor Cyan
+        $rules = @(
+            @{ Name = "Suspicious_PowerShell_Execution"; Pattern = "powershell|-enc|DownloadString|Invoke-Expression|IEX" },
+            @{ Name = "Shellcode_Stager_Pattern";        Pattern = "VirtualProtect|WriteProcessMemory|CreateRemoteThread" },
+            @{ Name = "CobaltStrike_Beacon_String";      Pattern = "ReflectiveLoader|meterpreter|mimikatz" },
+            @{ Name = "CryptoMiner_Artifact";            Pattern = "xmrig|stratum\+tcp|monero" }
+        )
+
+        $content = Get-Content $filePath -Raw -ErrorAction SilentlyContinue
+        $matched = $false
+
+        foreach ($rule in $rules) {
+            if ($content -match $rule.Pattern) {
+                Write-Host ("      [!] YARA MATCH DETECTED: {0}" -f $rule.Name) -ForegroundColor Red
+                $matched = $true
+            }
+        }
+        if (-not $matched) {
+            Write-Host "      [+] Zero YARA signature matches detected." -ForegroundColor Green
+        }
+    }
+
+    function Invoke-VirusTotalQuery ($sha256) {
+        Write-Host "`n  [*] Executing VirusTotal Intelligence Lookup..." -ForegroundColor Cyan
+        if ([string]::IsNullOrWhiteSpace($script:VTKey)) {
+            $script:VTKey = Read-CustomInput "  Enter VirusTotal API Key (Press ENTER to generate Web Browser link instead): "
+        }
+
+        if (-not [string]::IsNullOrWhiteSpace($script:VTKey)) {
+            try {
+                $headers = @{ "x-apikey" = $script:VTKey }
+                $response = Invoke-RestMethod -Uri ("https://www.virustotal.com/api/v3/files/{0}" -f $sha256) -Headers $headers -Method Get -ErrorAction Stop
+                $stats = $response.data.attributes.last_analysis_stats
+                Write-Host ("      [+] VirusTotal Detections: Malicious {0} / Suspicious {1} / Harmless {2}" -f $stats.malicious, $stats.suspicious, $stats.harmless) -ForegroundColor Yellow
+            } catch {
+                Write-Host ("      [!] VirusTotal API Error: {0}" -f $_) -ForegroundColor Red
+            }
+        } else {
+            $vtSearchUrl = "https://www.virustotal.com/gui/file/{0}/detection" -f $sha256
+            Write-Host ("      [*] VirusTotal Inspection Link (Ctrl + Click to Open):`n          " + $vtSearchUrl) -ForegroundColor Yellow
+        }
     }
 
     function Audit-ApplicationMetadata {
-        $inAuditMenu = $true
+        $inAudit = $true
+        while ($inAudit -and $script:Running) {
+            Write-Host "`n  [*] Auditing Downloads & Artifacts Created During Active Timeframe Window..." -ForegroundColor Cyan
+            Write-Host ("      Target Timeframe: {0} to {1}" -f $script:InvestigationState.TimeframeStart, $script:InvestigationState.TimeframeEnd) -ForegroundColor DarkGray
+            Write-Host "  -------------------------------------------------------------------------------------------------" -ForegroundColor DarkGray
 
-        while ($inAuditMenu -and $script:Running) {
-            Show-Header
-            Write-Host "[*] Auditing Application Metadata & Flagging Unsigned / Missing Metadata Items..." -ForegroundColor Cyan
-            Write-Host "----------------------------------------------------------------------------------------------------"
+            if ($script:InvestigationState.AuditHistory.Count -eq 0) {
+                $downloadsFolder = "$env:USERPROFILE\Downloads"
+                if (Test-Path $downloadsFolder) {
+                    Get-ChildItem $downloadsFolder -File -ErrorAction SilentlyContinue | Where-Object {
+                        $_.CreationTime -ge $script:InvestigationState.TimeframeStart -and $_.CreationTime -le $script:InvestigationState.TimeframeEnd
+                    } | ForEach-Object {
+                        $filePath = $_.FullName
+                        $publisher = "<MISSING METADATA>"
 
-            $metadataAudit = [System.Collections.Generic.List[PSObject]]::new()
-
-            $regKeys = @(
-                "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*",
-                "HKLM:\SOFTWARE\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*",
-                "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*"
-            )
-
-            Get-ItemProperty $regKeys -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName } | ForEach-Object {
-                $publisher = $_.Publisher
-                $flagged   = $false
-                $flagReason = "Normal"
-
-                if ([string]::IsNullOrWhiteSpace($publisher) -or $publisher -like "*Unknown*") {
-                    $flagged    = $true
-                    $flagReason = "[!] FLAGGED: NO METADATA / PUBLISHER"
-                    $publisher  = "<MISSING PUBLISHER>"
-                }
-
-                $installDate = $_.InstallDate
-                if ($installDate -and $installDate.Length -eq 8) {
-                    $installDate = "$($installDate.Substring(0,4))-$($installDate.Substring(4,2))-$($installDate.Substring(6,2))"
-                } elseif (-not $installDate) {
-                    $installDate = "Unknown"
-                }
-
-                $metadataAudit.Add([PSCustomObject]@{
-                    Status      = if ($flagged) { "FLAGGED" } else { "Clean" }
-                    FlagDetail  = $flagReason
-                    Type        = "Registry App"
-                    Name        = $_.DisplayName
-                    Publisher   = $publisher
-                    Version     = if ($_.DisplayVersion) { $_.DisplayVersion } else { "<NO VERSION>" }
-                    InstallDate = $installDate
-                    Path        = $_.InstallLocation
-                })
-            }
-
-            $downloadsFolder = "$env:USERPROFILE\Downloads"
-            if (Test-Path $downloadsFolder) {
-                Get-ChildItem $downloadsFolder -File -ErrorAction SilentlyContinue | ForEach-Object {
-                    $filePath = $_.FullName
-                    $publisher = "<MISSING METADATA>"
-                    $flagged   = $false
-                    $flagReason = "Normal"
-
-                    if ($_.Extension -in @(".exe", ".dll", ".sys", ".msi", ".ps1")) {
-                        $verInfo = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($filePath)
-                        if ($verInfo.CompanyName) {
-                            $publisher = $verInfo.CompanyName
-                        } else {
-                            $flagged    = $true
-                            $flagReason = "[!] FLAGGED: EXECUTABLE MISSING COMPANY METADATA"
+                        if ($_.Extension -in @(".exe", ".dll", ".sys", ".msi", ".ps1")) {
+                            $verInfo = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($filePath)
+                            if ($verInfo.CompanyName) { $publisher = $verInfo.CompanyName }
                         }
+
+                        $script:InvestigationState.AuditHistory.Add([PSCustomObject]@{
+                            CreatedDate = $_.CreationTime
+                            Status      = if ($publisher -eq "<MISSING METADATA>") { "FLAGGED" } else { "Clean" }
+                            Name        = $_.Name
+                            Publisher   = $publisher
+                            Path        = $filePath
+                        })
                     }
-
-                    $metadataAudit.Add([PSCustomObject]@{
-                        Status      = if ($flagged) { "FLAGGED" } else { "Clean" }
-                        FlagDetail  = $flagReason
-                        Type        = "Download Artifact"
-                        Name        = $_.Name
-                        Publisher   = $publisher
-                        Version     = "N/A"
-                        InstallDate = $_.CreationTime.ToString("yyyy-MM-dd HH:mm:ss")
-                        Path        = $filePath
-                    })
                 }
             }
 
+            $sortedAudit = $script:InvestigationState.AuditHistory | Sort-Object CreatedDate -Descending
             $flaggedList = [System.Collections.Generic.List[PSObject]]::new()
+            
             $idx = 1
-            foreach ($item in ($metadataAudit | Sort-Object Status -Descending)) {
-                if ($item.Status -eq "FLAGGED") {
-                    $item | Add-Member -NotePropertyName "Index" -NotePropertyValue $idx -Force
-                    $flaggedList.Add($item)
-                    $idx++
+            foreach ($item in $sortedAudit) {
+                $itemObj = [PSCustomObject]@{
+                    Index       = $idx
+                    CreatedDate = $item.CreatedDate.ToString("yyyy-MM-dd HH:mm:ss")
+                    Status      = $item.Status
+                    Name        = $item.Name
+                    Publisher   = $item.Publisher
+                    Path        = $item.Path
                 }
+                $flaggedList.Add($itemObj)
+                $idx++
             }
-
-            Write-Host "`n[+] Metadata Audit Complete." -ForegroundColor Green
-            Write-Host "    Total Records Evaluated     : $($metadataAudit.Count)" -ForegroundColor White
-            Write-Host "    Items Flagged (No Metadata) : $($flaggedList.Count)" -ForegroundColor Red
-            Write-Host "`n[*] Displaying Numbered Flagged Items:`n" -ForegroundColor Cyan
 
             if ($flaggedList.Count -gt 0) {
-                $flaggedList | Select-Object Index, Status, Name, Publisher, InstallDate, FlagDetail | Format-Table -AutoSize
+                $flaggedList | Select-Object Index, CreatedDate, Status, Name, Publisher | Format-Table -AutoSize
             } else {
-                Write-Host "    [+] Zero unverified or missing metadata executables found." -ForegroundColor Green
+                Write-Host "      [-] Zero download artifacts located for this specific date timeframe." -ForegroundColor Red
             }
 
-            Write-Host "----------------------------------------------------------------------------------------------------"
-            Write-Host "  [G] Export Complete Application Metadata Audit to GridView" -ForegroundColor Yellow
-            Write-Host "  [S] Run Static YARA / VirusTotal Verification on Flagged File (by Number)" -ForegroundColor Yellow
-            Write-Host "  [K] PURGE a flagged application or executable (by Number)" -ForegroundColor Red
-            Write-Host "  [B] Return to Forensics Menu" -ForegroundColor Gray
+            Write-Host "  -------------------------------------------------------------------------------------------------" -ForegroundColor DarkGray
+            Write-Host "  [S] Run Static Verification" -ForegroundColor Yellow
+            Write-Host "  [L] Pivot Download to Historical Log Engine" -ForegroundColor Cyan
+            Write-Host "  [K] PURGE Malware Executable" -ForegroundColor Red
+            Write-Host "  [T] Adjust Investigation Timeframe Window" -ForegroundColor Cyan
+            Write-Host "  [G] Export Complete Audit to GridView" -ForegroundColor Yellow
+            Write-Host "  [B] Return to NetScope Menu" -ForegroundColor Gray
             Write-Host "  [Q] Exit Application" -ForegroundColor Red
 
-            $opt = Read-Host "`nSelect option [G/S/K/B/Q]"
+            $opt = Read-CustomInput "`n  Select option [S/L/K/T/G/B/Q]: "
             switch ($opt.ToUpper()) {
-                "G" {
-                    $metadataAudit | Sort-Object Status -Descending | Out-GridView -Title "Forensicology by glastfin | Application Metadata Audit"
-                }
                 "S" {
                     if ($flaggedList.Count -eq 0) {
-                        Write-Host "[!] No flagged items available for static inspection." -ForegroundColor Red
-                        Start-Sleep -Seconds 1
+                        Write-Host "  [!] No items available to verify." -ForegroundColor Red; Start-Sleep -Seconds 1
                     } else {
-                        $numInput = Read-Host "`nEnter item number to verify statically [1-$($flaggedList.Count)]"
-                        $parsedIndex = 0
-                        if ([int]::TryParse($numInput, [ref]$parsedIndex)) {
-                            $selectedObj = $flaggedList | Where-Object { $_.Index -eq $parsedIndex }
-                            if ($selectedObj) {
-                                $targetPath = if ($selectedObj.Path) { $selectedObj.Path } else { $selectedObj.Name }
-                                $confirm = Read-Host "Confirm static analysis on target '$targetPath'? [y/N]"
-                                if ($confirm -eq 'y' -or $confirm -eq 'Y') {
-                                    Analyze-FileCustomPath $targetPath.Trim("'", '"')
-                                } else {
-                                    Write-Host "[-] Analysis canceled." -ForegroundColor Gray; Start-Sleep -Seconds 1
-                                }
-                            } else {
-                                Write-Host "[!] Index out of range." -ForegroundColor Red; Start-Sleep -Seconds 1
-                            }
+                        $numInput = Read-CustomInput ("`n  Enter item Index Number to statically verify [1-{0}]: " -f $flaggedList.Count)
+                        $selectedObj = $flaggedList | Where-Object { $_.Index -eq [int]$numInput }
+                        if ($selectedObj) {
+                            Analyze-FileCustomPath $selectedObj.Path
                         } else {
-                            Write-Host "[!] Invalid selection number format." -ForegroundColor Red; Start-Sleep -Seconds 1
+                            Write-Host "  [!] Invalid Index Number." -ForegroundColor Red; Start-Sleep -Seconds 1
+                        }
+                    }
+                }
+                "L" {
+                    if ($flaggedList.Count -eq 0) {
+                        Write-Host "  [!] No items available to pivot." -ForegroundColor Red; Start-Sleep -Seconds 1
+                    } else {
+                        $numInput = Read-CustomInput ("`n  Enter item Index Number to pivot into Historical Logs [1-{0}]: " -f $flaggedList.Count)
+                        $selectedObj = $flaggedList | Where-Object { $_.Index -eq [int]$numInput }
+                        if ($selectedObj) {
+                            $fileTime = [datetime]$selectedObj.CreatedDate
+                            $script:InvestigationState.TimeframeStart = $fileTime.AddMinutes(-10)
+                            $script:InvestigationState.TimeframeEnd   = $fileTime.AddMinutes(10)
+                            $script:InvestigationState.DiscoveredAssets.Clear()
+                            
+                            $fileNameOnly = [System.IO.Path]::GetFileNameWithoutExtension($selectedObj.Name)
+                            if (-not $script:InvestigationState.SuspiciousTargets.Contains($fileNameOnly)) {
+                                [void]$script:InvestigationState.SuspiciousTargets.Add($fileNameOnly)
+                            }
+
+                            Write-Host ("`n  [+] Timeframe locked to download window: {0} to {1}" -f $script:InvestigationState.TimeframeStart, $script:InvestigationState.TimeframeEnd) -ForegroundColor Green
+                            Write-Host ("  [+] Target indicator added: '{0}'" -f $fileNameOnly) -ForegroundColor Yellow
+                            Start-Sleep -Seconds 1.5
+                            
+                            Explorative-Forensics
+                        } else {
+                            Write-Host "  [!] Invalid Index Number." -ForegroundColor Red; Start-Sleep -Seconds 1
                         }
                     }
                 }
                 "K" {
                     if ($flaggedList.Count -eq 0) {
-                        Write-Host "[!] No flagged items available to purge." -ForegroundColor Red
-                        Start-Sleep -Seconds 1
+                        Write-Host "  [!] No items available to purge." -ForegroundColor Red; Start-Sleep -Seconds 1
                     } else {
-                        $numInput = Read-Host "`nEnter item number to PURGE [1-$($flaggedList.Count)]"
-                        $parsedIndex = 0
-                        if ([int]::TryParse($numInput, [ref]$parsedIndex)) {
-                            $selectedObj = $flaggedList | Where-Object { $_.Index -eq $parsedIndex }
-                            if ($selectedObj) {
-                                $targetPath = if ($selectedObj.Path) { $selectedObj.Path } else { $selectedObj.Name }
-                                $confirm = Read-Host "Confirm threat remediation & purge on '$targetPath'? [y/N]"
-                                if ($confirm -eq 'y' -or $confirm -eq 'Y') {
-                                    Purge-MalwareThreat $targetPath
-                                    Start-Sleep -Seconds 2
-                                } else {
-                                    Write-Host "[-] Purge action canceled." -ForegroundColor Gray; Start-Sleep -Seconds 1
-                                }
-                            } else {
-                                Write-Host "[!] Index out of range." -ForegroundColor Red; Start-Sleep -Seconds 1
-                            }
+                        $numInput = Read-CustomInput ("`n  Enter item Index Number to PURGE [1-{0}]: " -f $flaggedList.Count)
+                        $selectedObj = $flaggedList | Where-Object { $_.Index -eq [int]$numInput }
+                        if ($selectedObj) {
+                            Purge-MalwareThreat $selectedObj.Path
+                            $script:InvestigationState.AuditHistory.RemoveAll({ param($x) $x.Path -eq $selectedObj.Path }) | Out-Null
+                            Start-Sleep -Seconds 1
                         } else {
-                            Write-Host "[!] Invalid selection number format." -ForegroundColor Red; Start-Sleep -Seconds 1
+                            Write-Host "  [!] Invalid Index Number." -ForegroundColor Red; Start-Sleep -Seconds 1
                         }
                     }
                 }
-                "B" { $inAuditMenu = $false }
-                "Q" {
-                    $script:Running = $false
-                    $inAuditMenu = $false
-                }
-                default {
-                    Write-Host "[!] Invalid option selected. Retaining audit menu." -ForegroundColor Red
-                    Start-Sleep -Seconds 1
-                }
+                "T" { Set-InvestigationTimeframe; $script:InvestigationState.AuditHistory.Clear() }
+                "G" { $sortedAudit | Out-GridView -Title "Application Download Audit By Date" }
+                "B" { $inAudit = $false }
+                "Q" { $script:Running = $false; $inAudit = $false }
+                default { Write-Host "  [!] Option unrecognized." -ForegroundColor Red; Start-Sleep -Seconds 1 }
             }
         }
     }
 
     function Analyze-File {
-        Show-Header
-        $filePath = Read-Host "Enter target file path (or drag-and-drop file) [Press 'Q' to Exit]"
-        if ($filePath.Trim().ToUpper() -eq 'Q') {
-            $script:Running = $false
+        $filePath = Read-CustomInput "  Enter target file path (or drag-and-drop file) [Press 'Q' to Return]: "
+        if ($filePath.Trim().ToUpper() -eq 'Q' -or [string]::IsNullOrWhiteSpace($filePath)) {
             return
         }
 
@@ -439,402 +709,343 @@ try {
     }
 
     function Analyze-FileCustomPath ($filePath) {
-        $inStaticLoop = $true
+        if (-not (Test-Path $filePath -PathType Leaf)) {
+            Write-Host ("  [!] Target file path does not exist: {0}" -f $filePath) -ForegroundColor Red
+            Start-Sleep -Seconds 1.5
+            return
+        }
 
-        while ($inStaticLoop -and $script:Running) {
-            Show-Header
-            if (-not (Test-Path $filePath -PathType Leaf)) {
-                Write-Host "[!] Target file path does not exist: $filePath" -ForegroundColor Red
-                Start-Sleep -Seconds 2
-                return
-            }
+        Write-Host "`n  [*] Executing Static File Forensics..." -ForegroundColor Cyan
+        Write-Host "  -------------------------------------------------------------------------------------------------" -ForegroundColor DarkGray
 
-            Write-Host "`n[*] Executing Static File Forensics..." -ForegroundColor Cyan
-            Write-Host "----------------------------------------------------------------------------------------------------"
+        $item = Get-Item $filePath
+        Write-Host "  [-] File Name     : " -NoNewline; Write-Host $item.Name -ForegroundColor Yellow
+        Write-Host "  [-] Full Path     : " -NoNewline; Write-Host $item.FullName -ForegroundColor Yellow
+        Write-Host "  [-] File Size     : " -NoNewline; Write-Host ("{0} Bytes" -f $item.Length) -ForegroundColor Yellow
+        Write-Host "  [-] Modification  : " -NoNewline; Write-Host $item.LastWriteTime -ForegroundColor Yellow
 
-            $item = Get-Item $filePath
-            Write-Host "[-] File Name     : " -NoNewline; Write-Host $item.Name -ForegroundColor Yellow
-            Write-Host "[-] Full Path     : " -NoNewline; Write-Host $item.FullName -ForegroundColor Yellow
-            Write-Host "[-] File Size     : " -NoNewline; Write-Host "$($item.Length) Bytes" -ForegroundColor Yellow
-            Write-Host "[-] Modification  : " -NoNewline; Write-Host $item.LastWriteTime -ForegroundColor Yellow
+        $verInfo = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($filePath)
+        $compName = if ($verInfo.CompanyName) { $verInfo.CompanyName } else { "<MISSING METADATA>" }
+        Write-Host "  [-] Publisher     : " -NoNewline
+        if ($compName -eq "<MISSING METADATA>") {
+            Write-Host ("{0} [!] UNKNOWN / UNTRUSTED PUBLISHER" -f $compName) -ForegroundColor Red
+        } else {
+            Write-Host $compName -ForegroundColor Green
+        }
 
-            $verInfo = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($filePath)
-            $compName = if ($verInfo.CompanyName) { $verInfo.CompanyName } else { "<MISSING METADATA>" }
-            Write-Host "[-] Publisher     : " -NoNewline
-            if ($compName -eq "<MISSING METADATA>") {
-                Write-Host "$compName [!] UNKNOWN / UNTRUSTED PUBLISHER" -ForegroundColor Red
-            } else {
-                Write-Host $compName -ForegroundColor Green
-            }
+        Write-Host "`n  [*] Generating Cryptographic Hashes..." -ForegroundColor Cyan
+        $md5    = (Get-FileHash $filePath -Algorithm MD5).Hash
+        $sha256 = (Get-FileHash $filePath -Algorithm SHA256).Hash
+        Write-Host "  [-] MD5           : " -NoNewline; Write-Host $md5 -ForegroundColor White
+        Write-Host "  [-] SHA256        : " -NoNewline; Write-Host $sha256 -ForegroundColor White
 
-            Write-Host "`n[*] Generating Cryptographic Hashes..." -ForegroundColor Cyan
-            $md5    = (Get-FileHash $filePath -Algorithm MD5).Hash
-            $sha256 = (Get-FileHash $filePath -Algorithm SHA256).Hash
-            Write-Host "[-] MD5           : " -NoNewline; Write-Host $md5 -ForegroundColor White
-            Write-Host "[-] SHA256        : " -NoNewline; Write-Host $sha256 -ForegroundColor White
+        Write-Host "`n  [*] Extracting Printable ASCII Strings..." -ForegroundColor Cyan
+        Get-Content $filePath -Encoding Byte -ReadCount 0 -ErrorAction SilentlyContinue |
+            ForEach-Object { [System.Text.Encoding]::ASCII.GetString($_) } |
+            Select-String -Pattern "[\w\s]{6,}" -AllMatches |
+            Select-Object -ExpandProperty Matches |
+            Select-Object -First 10 -ExpandProperty Value |
+            ForEach-Object { Write-Host ("      > {0}" -f $_) -ForegroundColor DarkGray }
 
-            Write-Host "`n[*] Extracting Printable ASCII Strings..." -ForegroundColor Cyan
-            Get-Content $filePath -Encoding Byte -ReadCount 0 -ErrorAction SilentlyContinue |
-                ForEach-Object { [System.Text.Encoding]::ASCII.GetString($_) } |
-                Select-String -Pattern "[\w\s]{6,}" -AllMatches |
-                Select-Object -ExpandProperty Matches |
-                Select-Object -First 6 -ExpandProperty Value |
-                ForEach-Object { Write-Host "  > $_" -ForegroundColor DarkGray }
+        Invoke-YaraScan $filePath
+        Invoke-VirusTotalQuery $sha256
 
-            Write-Host "`n[+] Static analysis complete." -ForegroundColor Green
-            
-            Write-Host "`n----------------------------------------------------------------------------------------------------" -ForegroundColor DarkGray
-            Write-Host " EXTENDED THREAT CONFIRMATION OPTIONS:" -ForegroundColor Cyan
-            Write-Host "  [1] Execute Native Inline YARA Signature Inspection" -ForegroundColor Yellow
-            Write-Host "  [2] Query VirusTotal Database for Hash ($sha256)" -ForegroundColor Yellow
-            Write-Host "  [3] Execute Dual Inspection (Native YARA + VirusTotal API/Web)" -ForegroundColor Yellow
-            Write-Host "  [K] PURGE & REMEDIATE (Kill Process, Delete File, Clean RegKeys)" -ForegroundColor Red
-            Write-Host "  [4] Return to Menu" -ForegroundColor Gray
+        Write-Host "`n  [+] Static analysis complete~" -ForegroundColor Green
+
+        if (-not $script:InvestigationState.SuspiciousTargets.Contains($item.Name)) {
+            $script:InvestigationState.SuspiciousTargets.Add($item.Name)
+        }
+
+        $inStaticMenu = $true
+        while ($inStaticMenu -and $script:Running) {
+            Write-Host "`n  -------------------------------------------------------------------------------------------------" -ForegroundColor DarkMagenta
+            Write-Host "  EXTENDED THREAT CONFIRMATION OPTIONS:" -ForegroundColor Cyan
+            Write-Host ("  [1] Pivot to Historical Log Investigation Engine with '{0}'" -f $item.Name) -ForegroundColor Yellow
+            Write-Host "  [K] PURGE & REMEDIATE" -ForegroundColor Red
+            Write-Host "  [B] Return to NetScope Menu" -ForegroundColor Gray
             Write-Host "  [Q] Exit Application" -ForegroundColor Red
-            
-            $opt = Read-Host "`nSelect an option [1-4 / K / Q]"
+
+            $opt = Read-CustomInput "`n  Select an option [1 / K / B / Q]: "
             switch ($opt.ToUpper()) {
-                "1" { 
-                    Run-YaraScanInternal $filePath 
-                    Write-Host "`nPress any key to return..." -ForegroundColor Gray
-                    $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
-                }
-                "2" { 
-                    Run-VirusTotalInternal $filePath $sha256 
-                    Write-Host "`nPress any key to return..." -ForegroundColor Gray
-                    $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
-                }
-                "3" { 
-                    Run-YaraScanInternal $filePath
-                    Run-VirusTotalInternal $filePath $sha256
-                    Write-Host "`nPress any key to return..." -ForegroundColor Gray
-                    $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
-                }
-                "K" { 
-                    Purge-MalwareThreat $filePath 
-                    $inStaticLoop = $false
-                }
-                "4" { $inStaticLoop = $false }
-                "Q" { 
-                    $script:Running = $false
-                    $inStaticLoop = $false
-                }
-                default { 
-                    Write-Host "Invalid option. Please choose 1-4, K, or Q." -ForegroundColor Red
-                    Start-Sleep -Seconds 1
-                }
+                "1" { Explorative-Forensics; $inStaticMenu = $false }
+                "K" { Purge-MalwareThreat $filePath; $inStaticMenu = $false }
+                "B" { $inStaticMenu = $false }
+                "Q" { $script:Running = $false; $inStaticMenu = $false }
+                default { Write-Host "  [!] Unrecognized input." -ForegroundColor Yellow }
             }
         }
-    }
-
-    function Run-YaraScanInternal ($targetPath) {
-        Write-Host "`n[*] Initializing Native Inline YARA Signature Scan..." -ForegroundColor Cyan
-        
-        if (-not (Test-Path $targetPath)) {
-            Write-Host "[!] Target file for YARA inspection does not exist." -ForegroundColor Red
-            return
-        }
-
-        $signatures = @(
-            "powershell", "cmd.exe", "DownloadString", "Invoke-WebRequest",
-            "meterpreter", "xmrig", "mimikatz", "ReflectiveLoader"
-        )
-
-        try {
-            $rawContent = Get-Content -Path $targetPath -Raw -ErrorAction Stop
-            $matchedPatterns = @()
-
-            foreach ($sig in $signatures) {
-                if ($rawContent -match [regex]::Escape($sig)) {
-                    $matchedPatterns += $sig
-                }
-            }
-
-            if ($matchedPatterns.Count -gt 0) {
-                Write-Host "[!] YARA Signature Match Detected:" -ForegroundColor Red
-                Write-Host "    Rule [Suspicious_Identifiers]: Matches found -> $($matchedPatterns -join ', ')" -ForegroundColor Yellow
-            } else {
-                Write-Host "[+] Signature Status: Clean (No inline YARA rule matches detected)" -ForegroundColor Green
-            }
-        }
-        catch {
-            Write-Host "[!] Error performing in-memory YARA scan: $_" -ForegroundColor Red
-        }
-    }
-
-    function Run-VirusTotalInternal ($targetPath, $hash) {
-        Write-Host "`n[*] Querying VirusTotal Intelligence Database..." -ForegroundColor Cyan
-
-        if ([string]::IsNullOrEmpty($script:VTKey)) {
-            $inputKey = Read-Host "Enter VirusTotal API Key for session (Press ENTER to use API-Free Mode)"
-            $script:VTKey = $inputKey.Trim()
-        }
-
-        if (-not [string]::IsNullOrEmpty($script:VTKey)) {
-            try {
-                $headers = @{ "x-apikey" = $script:VTKey }
-                $url = "https://www.virustotal.com/api/v3/files/$hash"
-                $response = Invoke-RestMethod -Uri $url -Headers $headers -Method Get -ErrorAction Stop
-                $stats = $response.data.attributes.last_analysis_stats
-
-                Write-Host "[+] VirusTotal Detection Summary (via API):" -ForegroundColor Green
-                Write-Host "    - Malicious  : $($stats.malicious)" -ForegroundColor Red
-                Write-Host "    - Suspicious : $($stats.suspicious)" -ForegroundColor Yellow
-                Write-Host "    - Undetected : $($stats.undetected)" -ForegroundColor Green
-                Write-Host "    - Harmless   : $($stats.harmless)" -ForegroundColor Blue
-                return
-            }
-            catch {
-                Write-Host "[!] API Query Failed: Hash absent or invalid key. Switching to Web Fallback..." -ForegroundColor Yellow
-            }
-        }
-
-        Write-Host "[*] Executing API-Free Hash Search for $hash..." -ForegroundColor Cyan
-        try {
-            $aggUrl = "https://vt.unify.workers.dev/api/v3/files/$hash"
-            $response = Invoke-RestMethod -Uri $aggUrl -Method Get -ErrorAction Stop
-            $stats = $response.data.attributes.last_analysis_stats
-
-            Write-Host "[+] VirusTotal Detection Summary (via Public Aggregator):" -ForegroundColor Green
-            Write-Host "    - Malicious  : $($stats.malicious)" -ForegroundColor Red
-            Write-Host "    - Suspicious : $($stats.suspicious)" -ForegroundColor Yellow
-            Write-Host "    - Undetected : $($stats.undetected)" -ForegroundColor Green
-            Write-Host "    - Harmless   : $($stats.harmless)" -ForegroundColor Blue
-            return
-        }
-        catch {
-            Write-Host "[!] API-Free public endpoint unreachable." -ForegroundColor Yellow
-        }
-
-        $vtWebUrl = "https://www.virustotal.com/gui/file/$hash"
-        Write-Host "[+] Opening VirusTotal web report directly in your default browser:" -ForegroundColor Green
-        Write-Host "    $vtWebUrl" -ForegroundColor White
-        Start-Process $vtWebUrl
     }
 
     function Explorative-Forensics {
-        Show-Header
-
-        Write-Host "[*] Active Historical Timeslot Window:" -ForegroundColor Cyan
-        Write-Host "    Start : $($script:InvestigationState.TimeframeStart)" -ForegroundColor White
-        Write-Host "    End   : $($script:InvestigationState.TimeframeEnd)" -ForegroundColor White
-        
-        $changeTime = Read-Host "`nModify active timeframe window before executing scan? [y/N/Q]"
-        if ($changeTime.ToUpper() -eq 'Q') {
-            $script:Running = $false
-            return
-        }
-        if ($changeTime -eq 'y' -or $changeTime -eq 'Y') {
-            Set-TimeslotWindow
-        }
-
         $continuePivoting = $true
         while ($continuePivoting -and $script:Running) {
-            Show-Header
-            $StartTime    = $script:InvestigationState.TimeframeStart
-            $EndTime      = $script:InvestigationState.TimeframeEnd
-            $ComputerName = $env:COMPUTERNAME
-            $UserName     = $env:USERNAME
+            $StartTime = $script:InvestigationState.TimeframeStart
+            $EndTime   = $script:InvestigationState.TimeframeEnd
 
-            Write-Host "[*] INVESTIGATION TIMEFRAME : $StartTime TO $EndTime" -ForegroundColor Cyan
-            Write-Host "[*] ACTIVE INDICATORS       : $(if ($script:InvestigationState.SuspiciousTargets.Count -gt 0) { $script:InvestigationState.SuspiciousTargets -join ', ' } else { 'Blind Scan Mode' })" -ForegroundColor Yellow
-            Write-Host "----------------------------------------------------------------------------------------------------"
+            Write-Host ("`n  [*] INVESTIGATION TIMEFRAME : {0} TO {1}" -f $StartTime, $EndTime) -ForegroundColor Cyan
+            Write-Host ("  [*] ACTIVE INDICATORS       : {0}" -f $(if ($script:InvestigationState.SuspiciousTargets.Count -gt 0) { $script:InvestigationState.SuspiciousTargets -join ', ' } else { 'Blind Scan Mode (Unfiltered Search)' })) -ForegroundColor Yellow
+            Write-Host ("  [*] IGNORED CATEGORIES      : {0}" -f $(if ($script:InvestigationState.IgnoredCategories.Count -gt 0) { $script:InvestigationState.IgnoredCategories -join ', ' } else { 'None (Display All Categories)' })) -ForegroundColor DarkYellow
+            Write-Host ("  [*] OPERATOR to {0}         ::  [ Glory to Mankind ]" -f $script:HostIdentifier) -ForegroundColor Green
+            Write-Host "  -------------------------------------------------------------------------------------------------" -ForegroundColor DarkGray
 
-            $script:InvestigationState.DiscoveredAssets.Clear()
+            if ($script:InvestigationState.DiscoveredAssets.Count -eq 0) {
+                Get-WinEvent -FilterHashtable @{ LogName='Microsoft-Windows-PowerShell/Operational'; StartTime=$StartTime; EndTime=$EndTime } -ErrorAction SilentlyContinue | 
+                    ForEach-Object {
+                        if ($script:InvestigationState.DiscoveredAssets.Count -ge 5000) { return }
+                        $rawPayload = ""
+                        if ($_.Properties) { $rawPayload = ($_.Properties.Value -join " ") }
+                        $fullText = "{0} {1}" -f $_.Message, $rawPayload
 
-            Get-WinEvent -FilterHashtable @{ LogName='Application'; ProviderName='MsiInstaller'; StartTime=$StartTime; EndTime=$EndTime } -ErrorAction SilentlyContinue | ForEach-Object {
-                $script:InvestigationState.DiscoveredAssets.Add([PSCustomObject]@{
-                    Time = $_.TimeCreated; Category = "Installation"; Log = "MsiInstaller"; Detail = $_.Message
-                })
-            }
+                        $script:InvestigationState.DiscoveredAssets.Add([PSCustomObject]@{
+                            Time     = $_.TimeCreated
+                            Category = "PowerShell Execution"
+                            Log      = "PowerShell Operational"
+                            Detail   = $fullText
+                        })
+                    }
 
-            Get-WinEvent -FilterHashtable @{ LogName='Microsoft-Windows-PowerShell/Operational'; StartTime=$StartTime; EndTime=$EndTime } -ErrorAction SilentlyContinue | Where-Object {
-                $_.Message -match "curl|wget|WebRequest|WebClient|BitsTransfer|Invoke-WebRequest|Invoke-RestMethod|DownloadString|DownloadFile"
-            } | ForEach-Object {
-                $script:InvestigationState.DiscoveredAssets.Add([PSCustomObject]@{
-                    Time = $_.TimeCreated; Category = "PowerShell Download"; Log = "PowerShell"; Detail = $_.Message
-                })
-            }
+                Get-WinEvent -FilterHashtable @{ LogName='Security'; Id=@(4624, 4625, 4688); StartTime=$StartTime; EndTime=$EndTime } -ErrorAction SilentlyContinue | ForEach-Object {
+                    if ($script:InvestigationState.DiscoveredAssets.Count -ge 5000) { return }
+                    $rawPayload = ""
+                    if ($_.Properties) { $rawPayload = ($_.Properties.Value -join " ") }
+                    $script:InvestigationState.DiscoveredAssets.Add([PSCustomObject]@{
+                        Time     = $_.TimeCreated
+                        Category = ("Security Event ID {0}" -f $_.Id)
+                        Log      = "Security"
+                        Detail   = ("{0} {1}" -f $_.Message, $rawPayload)
+                    })
+                }
 
-            Get-WinEvent -FilterHashtable @{ LogName='Security'; Id=@(4624, 4625, 4672, 4688, 4720, 4722); StartTime=$StartTime; EndTime=$EndTime } -ErrorAction SilentlyContinue | ForEach-Object {
-                $script:InvestigationState.DiscoveredAssets.Add([PSCustomObject]@{
-                    Time = $_.TimeCreated; Category = "Security Event"; Log = "Security"; Detail = $_.Message
-                })
-            }
-
-            Get-WinEvent -FilterHashtable @{ LogName='Microsoft-Windows-Windows Defender/Operational'; StartTime=$StartTime; EndTime=$EndTime } -ErrorAction SilentlyContinue | ForEach-Object {
-                $script:InvestigationState.DiscoveredAssets.Add([PSCustomObject]@{
-                    Time = $_.TimeCreated; Category = "Defender Alert"; Log = "Defender"; Detail = $_.Message
-                })
+                Get-WinEvent -FilterHashtable @{ LogName='Microsoft-Windows-Windows Defender/Operational'; StartTime=$StartTime; EndTime=$EndTime } -ErrorAction SilentlyContinue | ForEach-Object {
+                    if ($script:InvestigationState.DiscoveredAssets.Count -ge 5000) { return }
+                    $script:InvestigationState.DiscoveredAssets.Add([PSCustomObject]@{
+                        Time     = $_.TimeCreated
+                        Category = "Defender Alert"
+                        Log      = "Defender"
+                        Detail   = $_.Message
+                    })
+                }
             }
 
             $displayEvents = $script:InvestigationState.DiscoveredAssets
+
+            # Apply Target Indicators Filter
             if ($script:InvestigationState.SuspiciousTargets.Count -gt 0) {
                 $displayEvents = $displayEvents | Where-Object {
                     $item = $_
                     $matched = $false
                     foreach ($target in $script:InvestigationState.SuspiciousTargets) {
-                        if ($item.Detail -like "*$target*" -or $item.Category -like "*$target*") {
-                            $matched = $true
-                            break
+                        if ([string]::IsNullOrWhiteSpace($target)) { continue }
+                        $cleanTarget = [regex]::Escape($target.Trim())
+                        if ($item.Detail -match $cleanTarget -or $item.Category -match $cleanTarget) { 
+                            $matched = $true 
+                            break 
                         }
                     }
                     return $matched
                 }
             }
 
-            $totalCount = $displayEvents.Count
-            if ($totalCount -eq 0) {
-                Write-Host "`n[-] Zero event records located within the selected window." -ForegroundColor Red
-            } else {
-                Write-Host "`n[+] Identified $totalCount event record(s). Displaying LATEST 8 Compact Entries:`n" -ForegroundColor Green
-
-                $compactList = $displayEvents | Sort-Object Time -Descending | Select-Object -First 8 | ForEach-Object {
-                    $cleanMsg = ($_.Detail -replace '[\r\n]+', ' ').Trim()
-                    if ($cleanMsg.Length -gt 55) { $cleanMsg = $cleanMsg.Substring(0, 52) + "..." }
-                    [PSCustomObject]@{
-                        Time     = $_.Time.ToString("yyyy-MM-dd HH:mm:ss")
-                        Category = $_.Category
-                        Log      = $_.Log
-                        Summary  = $cleanMsg
+            # Apply Ignored Categories Filter across Category, Log Name, and Details
+            if ($script:InvestigationState.IgnoredCategories.Count -gt 0) {
+                $displayEvents = $displayEvents | Where-Object {
+                    $item = $_
+                    $shouldIgnore = $false
+                    foreach ($ignoreTerm in $script:InvestigationState.IgnoredCategories) {
+                        if ([string]::IsNullOrWhiteSpace($ignoreTerm)) { continue }
+                        $cleanTerm = [regex]::Escape($ignoreTerm.Trim())
+                        if ($item.Category -match $cleanTerm -or $item.Log -match $cleanTerm -or $item.Detail -match $cleanTerm) {
+                            $shouldIgnore = $true
+                            break
+                        }
                     }
+                    return (-not $shouldIgnore)
                 }
-                $compactList | Format-Table -AutoSize
             }
 
-            Write-Host "----------------------------------------------------------------------------------------------------"
-            Write-Host "  [A] Add/Pivot on Indicator Term" -ForegroundColor Yellow
+            $totalCount = $displayEvents.Count
+            Write-Host ("`n  [+] Retained {0} event record(s) in session memory after filters." -f $totalCount) -ForegroundColor Green
+            if ($totalCount -gt 0) {
+                Write-Host "  [*] Displaying LATEST 10 RECORDS on-screen:`n" -ForegroundColor Cyan
+                $displayEvents | Sort-Object Time -Descending | Select-Object -First 10 @{N='Date'; E={$_.Time.ToString('yyyy-MM-dd HH:mm:ss')}}, Category, Log, Detail | Format-Table -AutoSize
+            } else {
+                Write-Host "  [-] Zero logs matched your active indicators and category filters.`n" -ForegroundColor DarkGray
+            }
 
+            Write-Host "  -------------------------------------------------------------------------------------------------" -ForegroundColor DarkGray
+            Write-Host "  [A] Add (+) or Remove (-) Target Indicator (e.g. 'meterpreter', '-meterpreter', '-*')" -ForegroundColor Yellow
+            Write-Host "  [F] Filter / Ignore Log Categories (e.g. 'PowerShell', 'Security', '-*' to reset)" -ForegroundColor Yellow
+            
             if ($script:InvestigationState.SuspiciousTargets.Count -gt 0) {
-                Write-Host "  [M] Audit Application Metadata (Focus on: $($script:InvestigationState.SuspiciousTargets -join ', '))" -ForegroundColor Yellow
-                Write-Host "  [S] Confirm Suspicious File via Static Analysis (YARA + VirusTotal)" -ForegroundColor Yellow
-                Write-Host "  [K] PURGE MALWARE (Kill process, delete file by path & clean RegKeys)" -ForegroundColor Red
-                Write-Host "  [C] Clear active indicators & revert to Blind Scan Mode" -ForegroundColor Yellow
+                Write-Host "  [M] Audit Download Metadata" -ForegroundColor Yellow
+                Write-Host "  [S] Static File Inspection Suite" -ForegroundColor Yellow
+                Write-Host "  [K] PURGE MALWARE" -ForegroundColor Red
             }
 
-            Write-Host "  [T] Modify active timeframe window" -ForegroundColor Yellow
-            Write-Host "  [R] Launch Native Resource Monitor" -ForegroundColor Yellow
-            Write-Host "  [G] Export complete dataset ($totalCount records) to Out-GridView" -ForegroundColor Yellow
-            Write-Host "  [B] Return to Main Menu" -ForegroundColor Gray
+            Write-Host "  [T] Adjust Investigation Timeframe Window" -ForegroundColor Cyan
+            Write-Host "  [G] Export Filtered Results to GridView" -ForegroundColor Yellow
+            Write-Host "  [B] Return to NetScope Menu" -ForegroundColor Gray
             Write-Host "  [Q] Exit Application" -ForegroundColor Red
             
-            $promptOptions = if ($script:InvestigationState.SuspiciousTargets.Count -gt 0) { "A/M/S/K/C/T/R/G/B/Q" } else { "A/T/R/G/B/Q" }
-            $choice = Read-Host "`nSelect action [$promptOptions]"
+            $promptOptions = if ($script:InvestigationState.SuspiciousTargets.Count -gt 0) { "A/F/M/S/K/T/G/B/Q" } else { "A/F/T/G/B/Q" }
+            $choice = Read-CustomInput ("`n  Select action [{0}]: " -f $promptOptions)
             
             switch ($choice.ToUpper()) {
                 "A" {
-                    $newItem = Read-Host "Enter indicator term/pattern (e.g. meterpreter, payload.exe)"
-                    if (-not [string]::IsNullOrWhiteSpace($newItem)) {
-                        $script:InvestigationState.SuspiciousTargets.Add($newItem)
-                        Write-Host "[+] Pattern '$newItem' added to active memory." -ForegroundColor Green
-                    }
-                }
-                "M" { 
-                    if ($script:InvestigationState.SuspiciousTargets.Count -gt 0) {
-                        Audit-ApplicationMetadata 
-                    } else {
-                        Write-Host "[!] Add an indicator using 'A' first." -ForegroundColor Red; Start-Sleep -Seconds 1
-                    }
-                }
-                "S" {
-                    if ($script:InvestigationState.SuspiciousTargets.Count -gt 0) {
-                        $confirmPath = Read-Host "Enter path of file to confirm statically"
-                        if (-not [string]::IsNullOrWhiteSpace($confirmPath)) {
-                            Analyze-FileCustomPath $confirmPath.Trim("'", '"')
+                    $inputTerm = Read-CustomInput "  Enter target indicator to ADD, REMOVE (-term), or CLEAR ALL (-*): "
+                    if (-not [string]::IsNullOrWhiteSpace($inputTerm)) {
+                        $rawInput = $inputTerm.Trim()
+
+                        if ($rawInput -eq "-*" -or $rawInput.ToLower() -eq "-all") {
+                            $script:InvestigationState.SuspiciousTargets.Clear()
+                            Write-Host "  [+] Cleared all target indicators." -ForegroundColor Green
                         }
-                    } else {
-                        Write-Host "[!] Add an indicator using 'A' first." -ForegroundColor Red; Start-Sleep -Seconds 1
+                        elseif ($rawInput.StartsWith("-")) {
+                            $termToRemove = $rawInput.TrimStart("-").Trim()
+                            [void]$script:InvestigationState.SuspiciousTargets.Remove($termToRemove)
+                            Write-Host ("  [+] Removed target indicator '{0}'." -f $termToRemove) -ForegroundColor Green
+                        } 
+                        else {
+                            if (-not $script:InvestigationState.SuspiciousTargets.Contains($rawInput)) {
+                                $script:InvestigationState.SuspiciousTargets.Add($rawInput)
+                                Write-Host ("  [+] Added target indicator '{0}'." -f $rawInput) -ForegroundColor Green
+                            }
+                        }
+                        Start-Sleep -Seconds 1
+                    }
+                }
+                "F" {
+                    $catInput = Read-CustomInput "  Enter category or log term to IGNORE (e.g. 'PowerShell'), REMOVE (-term), or RESET ALL (-*): "
+                    if ([string]::IsNullOrWhiteSpace($catInput) -or $catInput.Trim() -eq "-*") {
+                        $script:InvestigationState.IgnoredCategories.Clear()
+                        Write-Host "  [+] Cleared category exclusions. Displaying all log sources." -ForegroundColor Green
+                    }
+                    elseif ($catInput.Trim().StartsWith("-")) {
+                        $catToRemove = $catInput.Trim().TrimStart("-").Trim()
+                        [void]$script:InvestigationState.IgnoredCategories.Remove($catToRemove)
+                        Write-Host ("  [+] Removed category exclusion '{0}'." -f $catToRemove) -ForegroundColor Green
+                    }
+                    else {
+                        $cleanCat = $catInput.Trim()
+                        if (-not $script:InvestigationState.IgnoredCategories.Contains($cleanCat)) {
+                            $script:InvestigationState.IgnoredCategories.Add($cleanCat)
+                            Write-Host ("  [+] Ignoring log category '{0}'." -f $cleanCat) -ForegroundColor Green
+                        }
+                    }
+                    Start-Sleep -Seconds 1
+                }
+                "M" { Audit-ApplicationMetadata }
+                "S" {
+                    $confirmPath = Read-CustomInput "  Enter file path to inspect statically: "
+                    if (-not [string]::IsNullOrWhiteSpace($confirmPath)) {
+                        Analyze-FileCustomPath $confirmPath.Trim("'", '"')
                     }
                 }
                 "K" {
-                    if ($script:InvestigationState.SuspiciousTargets.Count -gt 0) {
-                        $purgePath = Read-Host "Enter file path or process name to purge"
-                        if (-not [string]::IsNullOrWhiteSpace($purgePath)) {
-                            Purge-MalwareThreat $purgePath
-                            Start-Sleep -Seconds 2
-                        }
-                    } else {
-                        Write-Host "[!] Add an indicator using 'A' first." -ForegroundColor Red; Start-Sleep -Seconds 1
+                    $purgePath = Read-CustomInput "  Enter file path or process name to purge: "
+                    if (-not [string]::IsNullOrWhiteSpace($purgePath)) {
+                        Purge-MalwareThreat $purgePath
+                        Start-Sleep -Seconds 1
                     }
                 }
-                "C" {
-                    $script:InvestigationState.SuspiciousTargets.Clear()
-                    Write-Host "[+] Indicator filters purged. Reverting to blind scan mode." -ForegroundColor Green
-                    Start-Sleep -Seconds 1
-                }
-                "T" { Set-TimeslotWindow }
-                "R" { Show-NativeResourceMonitor }
-                "G" { $displayEvents | Sort-Object Time -Descending | Out-GridView -Title "Forensicology by glastfin | Event Records ($StartTime to $EndTime)" }
+                "T" { Set-InvestigationTimeframe; $script:InvestigationState.DiscoveredAssets.Clear() }
+                "G" { $displayEvents | Sort-Object Time -Descending | Out-GridView -Title "Forensicology | Filtered Event Log Records" }
                 "B" { $continuePivoting = $false }
-                "Q" {
-                    $script:Running = $false
-                    $continuePivoting = $false
-                }
-                default { Write-Host "Invalid menu option." -ForegroundColor Red; Start-Sleep -Seconds 1 }
+                "Q" { $script:Running = $false; $continuePivoting = $false }
+                default { Write-Host "  [!] Choice unrecognized. Select from options listed above." -ForegroundColor Red; Start-Sleep -Seconds 1 }
             }
         }
     }
 
     function Show-NativeResourceMonitor {
-        Show-Header
-        Write-Host "====================================================================================================" -ForegroundColor Cyan
-        Write-Host "   Forensicology by glastfin | Native System Resource Monitor                                     " -ForegroundColor Green
-        Write-Host "====================================================================================================" -ForegroundColor Cyan
+        Write-Host "`n  +--- FORENSICOLOGY | Native System Resource Monitor --------------------------------------------+" -ForegroundColor Green
+        Write-Host "  |" -ForegroundColor Green
 
         $os = Get-CimInstance Win32_OperatingSystem
         $totalRamMB = [math]::Round($os.TotalVisibleMemorySize / 1024, 0)
-        $freeRamMB  = [math]::Round($os.FreePhysicalMemory / 1024, 0)
-        $usedRamMB  = $totalRamMB - $freeRamMB
-        $ramPercent = [math]::Round(($usedRamMB / $totalRamMB) * 100, 1)
+        $usedRamMB  = $totalRamMB - [math]::Round($os.FreePhysicalMemory / 1024, 0)
+        $cpuLoad    = (Get-CimInstance Win32_Processor | Measure-Object -Property LoadPercentage -Average).Average
 
-        $cpuLoad = (Get-CimInstance Win32_Processor | Measure-Object -Property LoadPercentage -Average).Average
-
-        $cpuBarLength = [math]::Round(($cpuLoad / 100) * 20)
-        $cpuBar = ("|" * $cpuBarLength).PadRight(20, " ")
-        
-        $ramBarLength = [math]::Round(($ramPercent / 100) * 20)
-        $ramBar = ("|" * $ramBarLength).PadRight(20, " ")
-
-        if ($cpuLoad -gt 70 -or $ramPercent -gt 85) {
-            $topProc = Get-Process | Sort-Object WorkingSet64 -Descending | Select-Object -First 1
-            Write-Host "`n+--------------------------------------------------------------------+ " -ForegroundColor Red
-            Write-Host "| [!] WARNING: HEAVY SYSTEM RESOURCE USAGE DETECTED                   | " -ForegroundColor Red
-            Write-Host "|     CPU: $cpuLoad% | RAM: $ramPercent%                                       | " -ForegroundColor Red
-            Write-Host "|     Top Consumer: PID $($topProc.Id) ($($topProc.ProcessName)) - $([math]::Round($topProc.WorkingSet64/1MB,1)) MB RAM   | " -ForegroundColor Yellow
-            Write-Host "+--------------------------------------------------------------------+ " -ForegroundColor Red
-        } else {
-            Write-Host "`n CPU Load  : [$cpuBar] $cpuLoad%" -ForegroundColor Yellow
-            Write-Host " RAM Usage : [$ramBar] $usedRamMB MB / $totalRamMB MB ($ramPercent%)" -ForegroundColor Cyan
-        }
-
-        Write-Host "----------------------------------------------------------------------------------------------------" -ForegroundColor DarkGray
-        Write-Host " TOP ACTIVE PROCESSES BY RAM ALLOCATION:" -ForegroundColor White
-
+        Write-Host ("  +---> CPU Load: {0}% | RAM Usage: {1} MB / {2} MB" -f $cpuLoad, $usedRamMB, $totalRamMB) -ForegroundColor Cyan
+        Write-Host "  +-------------------------------------------------------------------------------------------------+" -ForegroundColor Green
+        Write-Host ""
         Get-Process | Sort-Object WorkingSet64 -Descending | Select-Object -First 8 Id, ProcessName, @{N='RAM(MB)';E={[math]::Round($_.WorkingSet64/1MB,1)}}, CPU | Format-Table -AutoSize
 
-        Write-Host "`nPress any key to return (or 'Q' to Exit)..." -ForegroundColor Gray
-        $key = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
-        if ($key.Character -eq 'q' -or $key.Character -eq 'Q') {
-            $script:Running = $false
+        $key = Read-CustomInput "  Press Enter to return (or 'Q' to Exit): "
+        if ($key -eq 'q' -or $key -eq 'Q') { $script:Running = $false }
+    }
+
+    # ==============================================================================
+    # MAIN MENU CONTROLLER
+    # ==============================================================================
+    function Show-MainMenu {
+        Show-Header -catMood "home"
+        Write-Host "  +--- MAIN MODULE SELECTION ---------------------------------------------------------------------+" -ForegroundColor Cyan
+        Write-Host "  |" -ForegroundColor Cyan
+        Write-Host "  +---> [1] ConScopy" -ForegroundColor Yellow
+        Write-Host "  +---> [2] NetScopy" -ForegroundColor Yellow
+        Write-Host "  +---> [3] Native Resource Monitor" -ForegroundColor Yellow
+        Write-Host "  +---> [R] Reset / Clear In-Memory Investigation State" -ForegroundColor DarkYellow
+        Write-Host "  |" -ForegroundColor Cyan
+        Write-Host "  +---> [4 / Q] Terminate Session and Self-Clean" -ForegroundColor Red
+        Write-Host "  -------------------------------------------------------------------------------------------------" -ForegroundColor DarkGray
+        Write-Host ""
+        
+        if ($script:InvestigationState.DiscoveredAssets.Count -gt 0 -or $script:InvestigationState.SuspiciousTargets.Count -gt 0 -or $script:InvestigationState.DiscoveredIPs.Count -gt 0 -or $script:InvestigationState.IgnoredCategories.Count -gt 0) {
+            Write-Host "  +--- ACTIVE INVESTIGATION STATE --------------------------------------------+" -ForegroundColor DarkMagenta
+            Write-Host ("  |  * Tracked Indicators : {0}" -f $(if ($script:InvestigationState.SuspiciousTargets.Count -gt 0) { $script:InvestigationState.SuspiciousTargets -join ', ' } else { 'None (Blind Scan Mode)' })) -ForegroundColor Yellow
+            Write-Host ("  |  * Ignored Categories : {0}" -f $(if ($script:InvestigationState.IgnoredCategories.Count -gt 0) { $script:InvestigationState.IgnoredCategories -join ', ' } else { 'None' })) -ForegroundColor DarkYellow
+            Write-Host ("  |  * Tracked Public IPs : {0} Address(es) in memory" -f $script:InvestigationState.DiscoveredIPs.Count) -ForegroundColor Cyan
+            Write-Host ("  |  * Active Time Window : {0} to {1}" -f $script:InvestigationState.TimeframeStart, $script:InvestigationState.TimeframeEnd) -ForegroundColor White
+            Write-Host ("  |  * Retained Log Events: {0}" -f $script:InvestigationState.DiscoveredAssets.Count) -ForegroundColor Cyan
+            Write-Host ("  |  * Retained Audit File: {0}" -f $script:InvestigationState.AuditHistory.Count) -ForegroundColor Cyan
+            Write-Host "  +-------------------------------------------------------------------------------------------------+" -ForegroundColor DarkMagenta
+            Write-Host ""
         }
     }
 
+    # Main Framework Loop
     while ($script:Running) {
-        Show-Menu
-        $selection = Read-Host "Select option [1-4 / Q]"
+        Show-MainMenu
+        $selection = Read-CustomInput "  Select option [1-4 / R / Q]: "
         switch ($selection.ToUpper()) {
-            "1" { Analyze-File }
-            "2" { Explorative-Forensics }
+            "1" { Show-ConScopeMenu }
+            "2" { Show-NetScopeMenu }
             "3" { Show-NativeResourceMonitor }
+            "R" { Clear-SessionMemoryState }
             "4" { $script:Running = $false }
             "Q" { $script:Running = $false }
-            default { Write-Host "Invalid menu option." -ForegroundColor Red; Start-Sleep -Seconds 1 }
+            default { Write-Host "  [!] Invalid menu option. Enter 1, 2, 3, R, 4 or Q." -ForegroundColor Red; Start-Sleep -Seconds 1 }
+        }
+    }
+
+    # Centered Exit Overlay
+    if (-not $script:Running) {
+        $confirmExit = Show-CenteredExitBox -titleMessage "SESSION TERMINATION AND PURGE ENGINE"
+        if (-not $confirmExit) {
+            $script:Running = $true
+            while ($script:Running) {
+                Show-MainMenu
+                $selection = Read-CustomInput "  Select option [1-4 / R / Q]: "
+                switch ($selection.ToUpper()) {
+                    "1" { Show-ConScopeMenu }
+                    "2" { Show-NetScopeMenu }
+                    "3" { Show-NativeResourceMonitor }
+                    "R" { Clear-SessionMemoryState }
+                    "4" { $script:Running = $false }
+                    "Q" { $script:Running = $false }
+                    default { Write-Host "  [!] Invalid menu option." -ForegroundColor Red; Start-Sleep -Seconds 1 }
+                }
+            }
         }
     }
 }
 finally {
+    [Console]::remove_CancelKeyPress($cancelHandler)
     $script:VTKey = $null
     $script:InvestigationState = $null
-    $host.UI.RawUI.WindowTitle = $script:OriginalTitle
+    if ($host.Name -eq "ConsoleHost") {
+        $host.UI.RawUI.WindowTitle = $script:OriginalTitle
+    }
     Exit-ForensicsEngine
 }
